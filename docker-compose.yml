@@ -1,0 +1,115 @@
+version: '3.8'
+
+# SPanel 完整容器化部署方案
+# Bun + Playwright 在同一网络中
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: spanel-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-spanel}
+      MYSQL_USER: ${MYSQL_USER:-spanel}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-spanel_password}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - spanel-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+    # 只在外部需要 MySQL 时启动
+    profiles:
+      - external
+      - all
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: spanel-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - spanel-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # 只在外部需要 Redis 时启动
+    profiles:
+      - external
+      - all
+
+  # Bun Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: spanel-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"  # 暴露给外部 Nginx
+      - "9229:9229"  # 调试端口 (可选)
+    environment:
+      # 数据库连接 (使用外部 MySQL)
+      DATABASE_URL: "mysql://spanel:spanel_password@host.containers.internal:3306/spanel"
+      # 或使用容器内 MySQL (如果启用)
+      # DATABASE_URL: "mysql://spanel:spanel_password@mysql:3306/spanel"
+
+      # Redis 连接 (使用外部 Redis)
+      REDIS_URL: "redis://host.containers.internal:6379"
+      # 或使用容器内 Redis (如果启用)
+      # REDIS_URL: "redis://redis:6379"
+
+      # JWT
+      JWT_SECRET: "spanel-jwt-secret-key-2024"
+      JWT_EXPIRES_IN: "7d"
+
+      # Server
+      PORT: 3000
+      NODE_ENV: production
+
+      # CORS
+      CORS_ORIGIN: "https://test-spanel-bun.freessr.bid"
+    volumes:
+      - ./backend:/app:ro  # 只读挂载，生产环境可以移除
+      - /app/node_modules  # 防止覆盖 node_modules
+    networks:
+      - spanel-network
+    depends_on:
+      - mysql
+      - redis
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Playwright MCP Server (已存在，不需要重新创建)
+  # playwright:
+  #   image: localhost/playwright-mcp:latest
+  #   container_name: playwright-mcp-server
+  #   ports:
+  #     - "8931:8931"
+  #   networks:
+  #     - spanel-network
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  spanel-network:
+    name: main
+    external: true

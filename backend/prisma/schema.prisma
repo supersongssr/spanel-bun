@@ -1,0 +1,209 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// User model
+model User {
+  id            Int      @id @default(autoincrement())
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  username      String   @unique
+  password      String
+  pass          String?  // Legacy field
+  token         String?  @unique
+  uuid          String?  @unique
+  portrait      String?
+  u             Int      @default(0) // Upload traffic
+  d             Int      @default(0) // Download traffic
+  transferEnable Int     @default(0) // Total traffic limit
+  lastCheckinTime Int?   @default(0)
+  lastCheckinIp   String?
+  expireTime    Int?     @default(0)
+  userGroupId   Int?     @default(0)
+  planId        Int?     @default(0)
+  theme         String?  @default("material")
+  isAdmin       Boolean  @default(false)
+  isAgent       Boolean  @default(false)
+  isBanned      Boolean  @default(false)
+  isEmailBanned Boolean  @default(false)
+  bannedReason  String?
+  refBy         Int?     @default(0)
+  refCount      Int      @default(0)
+  balance       Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  orders        Order[]
+  tickets       Ticket[]
+  trafficLogs   TrafficLog[]
+
+  @@map("user")
+}
+
+// Node model
+model Node {
+  id          Int      @id @default(autoincrement())
+  name        String
+  server      String
+  type        Int      @default(1) // 1=shadowsocks, 2=vmess, 3=vless, 4=trojan, etc
+  protocol    String   @default("shadowsocks")
+  info        String?
+  host        String?
+  method      String   @default("aes-256-gcm")
+  rate        String   @default("1.00")
+  status      Boolean  @default(true)
+  isOnline    Boolean  @default(false)
+  onlineUserCount Int  @default(0)
+  load        String?  @default("0.00")
+  muPort      Int?
+  muRegex     String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  trafficLogs TrafficLog[]
+
+  @@map("node")
+}
+
+// Plan model
+model Plan {
+  id              Int      @id @default(autoincrement())
+  name            String
+  content         String?  // Plan description
+  monthlyPrice    Int      @default(0)
+  quarterlyPrice  Int      @default(0)
+  halfYearPrice   Int      @default(0)
+  yearlyPrice     Int      @default(0)
+  transferEnable  Int      @default(0) // Traffic limit in GB
+  speedLimit      Int      @default(0) // Speed limit in Mbps
+  nodeGroupId     Int?
+  nodeGroup       String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  orders          Order[]
+
+  @@map("plan")
+}
+
+// Order model
+model Order {
+  id              Int      @id @default(autoincrement())
+  userId          Int
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId          Int
+  plan            Plan     @relation(fields: [planId], references: [id])
+  status          Int      @default(0) // 0=unpaid, 1=paid, 2=cancelled, 3=expired
+  amount          Int
+  paymentMethod   String?  // alipay, wechat, etc
+  paymentId       String?  @unique
+  isNotified      Boolean  @default(false)
+  updatedAt       DateTime @updatedAt
+  createdAt       DateTime @default(now())
+
+  @@map("order")
+}
+
+// Ticket model
+model Ticket {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  content     String   @db.Text
+  status      Int      @default(0) // 0=open, 1=replied, 2=closed
+  reply       String?  @db.Text
+  replyAt     DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("ticket")
+}
+
+// Traffic Log model
+model TrafficLog {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nodeId      Int
+  node        Node     @relation(fields: [nodeId], references: [id])
+  u           Int      @default(0) // Upload traffic
+  d           Int      @default(0) // Download traffic
+  rate        Float    @default(1.0)
+  timestamp   Int
+  createdAt   DateTime @default(now())
+
+  @@index([userId, timestamp])
+  @@index([nodeId, timestamp])
+  @@map("traffic_log")
+}
+
+// Code model (邀请码/充值码)
+model Code {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique
+  type        Int      @default(1) // 1=invite, 2=recharge
+  value       Int      @default(0)
+  userId      Int?     // Creator user ID
+  useCount    Int      @default(0)
+  maxUseCount Int      @default(1)
+  isActive    Boolean  @default(true)
+  expireTime  Int?     @default(0)
+  createdAt   DateTime @default(now())
+
+  @@map("code")
+}
+
+// Config model (系统配置)
+model Config {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique
+  value       String   @db.Text
+  type        String   @default("string") // string, number, boolean, json
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("config")
+}
+
+// Shop Item model (商品)
+model ShopItem {
+  id          Int      @id @default(autoincrement())
+  name        String
+  content     String?  @db.Text
+  price       Int      @default(0)
+  status      Boolean  @default(true)
+  autoResetNode Boolean @default(false)
+  nodeId      Int?
+  traffic     Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("shop_item")
+}
+
+// Notice model (公告)
+model Notice {
+  id          Int      @id @default(autoincrement())
+  title       String
+  content     String   @db.Text
+  priority    Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("notice")
+}
