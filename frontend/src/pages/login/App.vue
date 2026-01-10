@@ -46,12 +46,10 @@
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
 import { useAuth } from '@/shared/composables/useAuth'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 
-const router = useRouter()
 const { login } = useAuth()
 
 const formRef = ref<FormInstance>()
