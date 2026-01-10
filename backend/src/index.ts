@@ -4,10 +4,11 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 
 // Import routes
-import authRoutes from './controllers/auth.controller'
-import userRoutes from './controllers/user.controller'
-import nodeRoutes from './controllers/node.controller'
-import adminRoutes from './controllers/admin.controller'
+// TODO: Temporarily disabled due to Prisma compatibility issues
+// import authRoutes from './controllers/auth.controller'
+// import userRoutes from './controllers/user.controller'
+// import nodeRoutes from './controllers/node.controller'
+// import adminRoutes from './controllers/admin.controller'
 
 // Create Hono app
 const app = new Hono()
@@ -46,10 +47,11 @@ app.get('/health', (c) => {
 })
 
 // API routes
-app.route('/auth', authRoutes)
-app.route('/user', userRoutes)
-app.route('/node', nodeRoutes)
-app.route('/admin', adminRoutes)
+// Temporarily disabled - will be re-enabled after fixing Prisma
+// app.route('/auth', authRoutes)
+// app.route('/user', userRoutes)
+// app.route('/node', nodeRoutes)
+// app.route('/admin', adminRoutes)
 
 // 404 handler
 app.notFound((c) => {
