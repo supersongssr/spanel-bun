@@ -60,8 +60,12 @@ export default defineConfig({
         'shop': resolve(__dirname, 'src/pages/shop/index.html'),
         'ticket': resolve(__dirname, 'src/pages/ticket/index.html'),
         'profile': resolve(__dirname, 'src/pages/profile/index.html'),
-        // Admin page
-        'admin/index': resolve(__dirname, 'src/pages/admin/index.html'),
+        // User dashboard pages
+        'user/dashboard': resolve(__dirname, 'public/user/dashboard.html'),
+        'user/nodes': resolve(__dirname, 'public/user/nodes.html'),
+        // Admin pages
+        'admin/index': resolve(__dirname, 'public/admin/index.html'),
+        'admin/users': resolve(__dirname, 'public/admin/users.html'),
       },
       output: {
         entryFileNames: 'assets/[name]-[hash].js',

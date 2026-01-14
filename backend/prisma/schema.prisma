@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl"]
@@ -11,200 +8,391 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// User model
-model User {
-  id            Int      @id @default(autoincrement())
-  email         String   @unique
-  emailVerified Boolean  @default(false)
-  username      String   @unique
-  password      String
-  pass          String?  // Legacy field
-  token         String?  @unique
-  uuid          String?  @unique
-  portrait      String?
-  u             Int      @default(0) // Upload traffic
-  d             Int      @default(0) // Download traffic
-  transferEnable Int     @default(0) // Total traffic limit
-  lastCheckinTime Int?   @default(0)
-  lastCheckinIp   String?
-  expireTime    Int?     @default(0)
-  userGroupId   Int?     @default(0)
-  planId        Int?     @default(0)
-  theme         String?  @default("material")
-  isAdmin       Boolean  @default(false)
-  isAgent       Boolean  @default(false)
-  isBanned      Boolean  @default(false)
-  isEmailBanned Boolean  @default(false)
-  bannedReason  String?
-  refBy         Int?     @default(0)
-  refCount      Int      @default(0)
-  balance       Int      @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  // Relations
-  orders        Order[]
-  tickets       Ticket[]
-  trafficLogs   TrafficLog[]
-
-  @@map("user")
+model alive_ip {
+  id       BigInt @id @default(autoincrement())
+  nodeid   Int
+  userid   Int
+  ip       String @db.Text
+  datetime BigInt
 }
 
-// Node model
-model Node {
-  id          Int      @id @default(autoincrement())
-  name        String
-  server      String
-  type        Int      @default(1) // 1=shadowsocks, 2=vmess, 3=vless, 4=trojan, etc
-  protocol    String   @default("shadowsocks")
-  info        String?
-  host        String?
-  method      String   @default("aes-256-gcm")
-  rate        String   @default("1.00")
-  status      Boolean  @default(true)
-  isOnline    Boolean  @default(false)
-  onlineUserCount Int  @default(0)
-  load        String?  @default("0.00")
-  muPort      Int?
-  muRegex     String?
-  sortOrder   Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  // Relations
-  trafficLogs TrafficLog[]
-
-  @@map("node")
+model announcement {
+  id       Int      @id @default(autoincrement())
+  date     DateTime @db.DateTime(0)
+  content  String   @db.LongText
+  markdown String   @db.LongText
 }
 
-// Plan model
-model Plan {
-  id              Int      @id @default(autoincrement())
-  name            String
-  content         String?  // Plan description
-  monthlyPrice    Int      @default(0)
-  quarterlyPrice  Int      @default(0)
-  halfYearPrice   Int      @default(0)
-  yearlyPrice     Int      @default(0)
-  transferEnable  Int      @default(0) // Traffic limit in GB
-  speedLimit      Int      @default(0) // Speed limit in Mbps
-  nodeGroupId     Int?
-  nodeGroup       String?
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  // Relations
-  orders          Order[]
-
-  @@map("plan")
+model auto {
+  id       BigInt @id @default(autoincrement())
+  type     Int
+  value    String @db.LongText
+  sign     String @db.LongText
+  datetime BigInt
 }
 
-// Order model
-model Order {
-  id              Int      @id @default(autoincrement())
-  userId          Int
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  planId          Int
-  plan            Plan     @relation(fields: [planId], references: [id])
-  status          Int      @default(0) // 0=unpaid, 1=paid, 2=cancelled, 3=expired
-  amount          Int
-  paymentMethod   String?  // alipay, wechat, etc
-  paymentId       String?  @unique
-  isNotified      Boolean  @default(false)
-  updatedAt       DateTime @updatedAt
-  createdAt       DateTime @default(now())
-
-  @@map("order")
+model blockip {
+  id       BigInt @id @default(autoincrement())
+  nodeid   Int
+  ip       String @db.Text
+  datetime BigInt
 }
 
-// Ticket model
-model Ticket {
-  id          Int      @id @default(autoincrement())
-  userId      Int
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title       String
-  content     String   @db.Text
-  status      Int      @default(0) // 0=open, 1=replied, 2=closed
-  reply       String?  @db.Text
-  replyAt     DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@map("ticket")
+model bought {
+  id       BigInt  @id @default(autoincrement())
+  userid   BigInt
+  shopid   BigInt
+  datetime BigInt
+  renew    BigInt
+  coupon   String  @db.Text
+  price    Decimal @db.Decimal(12, 2)
 }
 
-// Traffic Log model
-model TrafficLog {
-  id          Int      @id @default(autoincrement())
-  userId      Int
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  nodeId      Int
-  node        Node     @relation(fields: [nodeId], references: [id])
-  u           Int      @default(0) // Upload traffic
-  d           Int      @default(0) // Download traffic
-  rate        Float    @default(1.0)
-  timestamp   Int
-  createdAt   DateTime @default(now())
-
-  @@index([userId, timestamp])
-  @@index([nodeId, timestamp])
-  @@map("traffic_log")
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model cncdn {
+  id     Int    @id @default(autoincrement())
+  area   String @db.VarChar(128)
+  areaid String @db.VarChar(128)
+  server String @db.VarChar(64)
+  cdnip  String @db.VarChar(64)
+  ipmd5  String @db.VarChar(64)
+  host   String @db.VarChar(64)
+  show   Int    @default(1)
+  status Int    @default(1)
 }
 
-// Code model (邀请码/充值码)
-model Code {
-  id          Int      @id @default(autoincrement())
-  code        String   @unique
-  type        Int      @default(1) // 1=invite, 2=recharge
-  value       Int      @default(0)
-  userId      Int?     // Creator user ID
-  useCount    Int      @default(0)
-  maxUseCount Int      @default(1)
-  isActive    Boolean  @default(true)
-  expireTime  Int?     @default(0)
-  createdAt   DateTime @default(now())
-
-  @@map("code")
+model code {
+  id          BigInt   @id @default(autoincrement())
+  code        String   @db.Text
+  type        Int
+  number      Decimal  @db.Decimal(11, 2)
+  isused      Int      @default(0)
+  userid      BigInt
+  usedatetime DateTime @db.DateTime(0)
 }
 
-// Config model (系统配置)
-model Config {
-  id          Int      @id @default(autoincrement())
-  key         String   @unique
-  value       String   @db.Text
-  type        String   @default("string") // string, number, boolean, json
-  description String?
-  updatedAt   DateTime @updatedAt
-
-  @@map("config")
+model coupon {
+  id      BigInt @id @default(autoincrement())
+  code    String @db.Text
+  onetime Int
+  expire  BigInt
+  shop    String @db.Text
+  credit  Int
 }
 
-// Shop Item model (商品)
-model ShopItem {
-  id          Int      @id @default(autoincrement())
-  name        String
-  content     String?  @db.Text
-  price       Int      @default(0)
-  status      Boolean  @default(true)
-  autoResetNode Boolean @default(false)
-  nodeId      Int?
-  traffic     Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@map("shop_item")
+model detect_list {
+  id    BigInt @id @default(autoincrement())
+  name  String @db.LongText
+  text  String @db.LongText
+  regex String @db.LongText
+  type  Int
 }
 
-// Notice model (公告)
-model Notice {
-  id          Int      @id @default(autoincrement())
-  title       String
-  content     String   @db.Text
-  priority    Int      @default(0)
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+model detect_log {
+  id       BigInt @id @default(autoincrement())
+  user_id  BigInt
+  list_id  BigInt
+  datetime BigInt
+  node_id  Int
+}
 
-  @@map("notice")
+model disconnect_ip {
+  id       BigInt @id @default(autoincrement())
+  userid   BigInt
+  ip       String @db.Text
+  datetime BigInt
+}
+
+model email_verify {
+  id        BigInt @id @default(autoincrement())
+  email     String @db.Text
+  ip        String @db.Text
+  code      String @db.Text
+  expire_in BigInt
+}
+
+model link {
+  id      BigInt  @id @default(autoincrement())
+  type    Int
+  address String  @db.Text
+  port    Int
+  token   String  @db.Text
+  ios     Int     @default(0)
+  userid  BigInt
+  isp     String? @db.Text
+  geo     Int?
+  method  String? @db.Text
+}
+
+model login_ip {
+  id       BigInt @id @default(autoincrement())
+  userid   BigInt
+  ip       String @db.Text
+  datetime BigInt
+  type     Int
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model payback {
+  id       BigInt  @id @default(autoincrement())
+  total    Decimal @db.Decimal(12, 2)
+  userid   BigInt
+  ref_by   BigInt
+  ref_get  Decimal @db.Decimal(12, 2)
+  callback Int?
+  datetime BigInt
+}
+
+model paylist {
+  id       BigInt  @id @default(autoincrement())
+  userid   BigInt
+  total    Decimal @db.Decimal(12, 2)
+  status   Int     @default(0)
+  tradeno  String? @db.Text
+  datetime BigInt  @default(0)
+}
+
+model radius_ban {
+  id     Int @id @default(autoincrement())
+  userid Int
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model record {
+  id      Int     @id @default(autoincrement())
+  name    String  @db.VarChar(128)
+  value   String? @db.Text
+  comment String? @db.VarChar(128)
+}
+
+model relay {
+  id             BigInt @id @default(autoincrement())
+  user_id        BigInt
+  source_node_id BigInt
+  dist_node_id   BigInt
+  dist_ip        String @db.Text
+  port           Int
+  priority       Int
+}
+
+model shop {
+  id                   BigInt  @id @default(autoincrement())
+  name                 String  @db.Text
+  price                Decimal @db.Decimal(12, 2)
+  content              String  @db.Text
+  auto_renew           Int
+  auto_reset_bandwidth Int     @default(0)
+  status               Int     @default(1)
+}
+
+model speedtest {
+  id               BigInt @id @default(autoincrement())
+  nodeid           Int
+  datetime         BigInt
+  telecomping      String @db.Text
+  telecomeupload   String @db.Text
+  telecomedownload String @db.Text
+  unicomping       String @db.Text
+  unicomupload     String @db.Text
+  unicomdownload   String @db.Text
+  cmccping         String @db.Text
+  cmccupload       String @db.Text
+  cmccdownload     String @db.Text
+}
+
+model ss_invite_code {
+  id         Int      @id @default(autoincrement())
+  code       String   @db.VarChar(128)
+  user_id    Int
+  created_at DateTime @default(now()) @db.Timestamp(0)
+  updated_at DateTime @default(dbgenerated("'2016-06-01 08:00:00'")) @db.Timestamp(0)
+
+  @@index([user_id], map: "user_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model ss_node {
+  id                      Int     @id @default(autoincrement())
+  name                    String  @db.VarChar(128)
+  type                    Int
+  server                  String  @db.VarChar(500)
+  cncdn                   Int?    @db.TinyInt
+  method                  String  @db.VarChar(64)
+  info                    String  @db.VarChar(128)
+  status                  String  @db.VarChar(128)
+  sort                    Int
+  custom_method           Boolean @default(false)
+  traffic_rate            Float   @default(1) @db.Float
+  node_class              Int     @default(0)
+  node_speedlimit         Decimal @default(0.00) @db.Decimal(12, 2)
+  node_connector          Int     @default(0)
+  node_bandwidth          BigInt  @default(0)
+  node_bandwidth_lastday  BigInt? @default(0)
+  node_bandwidth_limit    BigInt  @default(0)
+  bandwidthlimit_resetday Int     @default(0)
+  node_heartbeat          BigInt  @default(0)
+  node_ip                 String  @db.VarChar(255)
+  node_group              Int     @default(0)
+  custom_rss              Int     @default(0)
+  mu_only                 Int?    @default(0)
+  node_cost               Int     @default(5)
+  node_online             Int     @default(1)
+  node_oncost             Float   @default(0) @db.Float
+  node_sort               Int?    @default(0)
+  is_clone                Int?    @default(0)
+  traffic_used            BigInt? @default(0)
+  traffic_left            BigInt? @default(0)
+  traffic_used_daily      BigInt? @default(0)
+  traffic_left_daily      BigInt? @default(0)
+  node_unlock             String? @default("") @db.VarChar(500)
+  country_code            String? @default("") @db.VarChar(32)
+}
+
+model ss_node_info {
+  id       Int    @id @default(autoincrement())
+  node_id  Int
+  uptime   Float  @db.Float
+  load     String @db.VarChar(32)
+  log_time Int
+}
+
+model ss_node_online_log {
+  id          Int @id @default(autoincrement())
+  node_id     Int
+  online_user Int
+  log_time    Int
+}
+
+model ss_password_reset {
+  id          Int    @id @default(autoincrement())
+  email       String @db.VarChar(32)
+  token       String @db.VarChar(128)
+  init_time   Int
+  expire_time Int
+}
+
+model telegram_session {
+  id              BigInt @id @default(autoincrement())
+  user_id         BigInt
+  type            Int
+  session_content String @db.Text
+  datetime        BigInt
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model ticket {
+  id       BigInt @id @default(autoincrement())
+  title    String @db.LongText
+  content  String @db.LongText
+  rootid   BigInt
+  userid   BigInt
+  sort     Int?   @default(0)
+  datetime BigInt
+  status   Int    @default(1)
+}
+
+model unblockip {
+  id       BigInt @id @default(autoincrement())
+  ip       String @db.Text
+  datetime BigInt
+  userid   BigInt
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model user {
+  id                   Int      @id @default(autoincrement())
+  user_name            String   @db.VarChar(128)
+  email                String   @db.VarChar(64)
+  pass                 String   @db.VarChar(64)
+  passwd               String   @db.VarChar(16)
+  v2ray_uuid           String?  @db.VarChar(64)
+  t                    Int      @default(0)
+  u                    BigInt
+  d                    BigInt
+  plan                 String   @default("A") @db.VarChar(2)
+  transfer_enable      BigInt
+  transfer_limit       BigInt?  @default(1073741824)
+  port                 Int
+  switch               Int      @default(1) @db.TinyInt
+  enable               Int      @default(1) @db.TinyInt
+  type                 Int      @default(1) @db.TinyInt
+  last_get_gift_time   Int      @default(0)
+  last_check_in_time   Int      @default(0)
+  last_rest_pass_time  Int      @default(0)
+  reg_date             DateTime @db.DateTime(0)
+  invite_num           Int
+  money                Decimal  @db.Decimal(12, 2)
+  ref_by               Int      @default(0)
+  score                Int?     @default(0)
+  expire_time          Int      @default(0)
+  method               String   @default("rc4-md5") @db.VarChar(64)
+  is_email_verify      Int      @default(0) @db.TinyInt
+  reg_ip               String   @default("127.0.0.1") @db.VarChar(128)
+  node_speedlimit      Decimal  @default(0.00) @db.Decimal(12, 2)
+  node_connector       Int      @default(0)
+  is_admin             Int      @default(0)
+  im_type              Int?     @default(1)
+  im_value             String?  @db.Text
+  last_day_t           BigInt   @default(0)
+  is_edu               String?  @default("0") @db.VarChar(64)
+  sendDailyMail        Int      @default(0)
+  class                Int      @default(0)
+  renew                Float?   @default(0) @db.Float
+  class_expire         DateTime @default(dbgenerated("'1989-06-04 00:05:00'")) @db.DateTime(0)
+  expire_in            DateTime @default(dbgenerated("'2099-06-04 00:05:00'")) @db.DateTime(0)
+  theme                String   @db.Text
+  ga_token             String   @db.Text
+  ga_enable            Int      @default(0)
+  pac                  String?  @db.LongText
+  remark               String?  @db.Text
+  node_group           Int      @default(0)
+  auto_reset_day       Int      @default(0)
+  auto_reset_bandwidth Decimal  @default(0.00) @db.Decimal(12, 2)
+  protocol             String?  @default("origin") @db.VarChar(128)
+  protocol_param       String?  @db.VarChar(128)
+  obfs                 String?  @default("plain") @db.VarChar(128)
+  obfs_param           String?  @db.VarChar(128)
+  forbidden_ip         String?  @db.LongText
+  forbidden_port       String?  @db.LongText
+  disconnect_ip        String?  @db.LongText
+  is_hide              Int      @default(0)
+  is_multi_user        Int      @default(0)
+  telegram_id          BigInt?
+  ban_times            Int      @default(0)
+  sub_limit            Int      @default(16)
+  rss_ip               String?  @db.VarChar(64)
+  rss_count            Int?     @default(0)
+  rss_count_lastday    Int?     @default(0)
+  rss_ips_count        Int?     @default(0)
+  rss_ips_lastday      Int?     @default(0)
+  cncdn                String?  @default("0") @db.VarChar(64)
+  cncdn_count          String?  @default("0") @db.VarChar(64)
+  cfcdn                String?  @default("0") @db.VarChar(64)
+  cfcdn_count          String?  @default("0") @db.VarChar(64)
+  warming              String?  @db.Text
+  renew_time           Int?     @default(0)
+  upswd                String?  @default("0") @db.VarChar(64)
+
+  @@index([email], map: "email")
+  @@index([id], map: "uid")
+  @@index([user_name], map: "user_name")
+}
+
+model user_token {
+  id          Int    @id @default(autoincrement())
+  token       String @db.VarChar(255)
+  user_id     Int
+  create_time Int
+  expire_time Int
+}
+
+model user_traffic_log {
+  id       Int    @id @default(autoincrement())
+  user_id  Int
+  u        BigInt
+  d        BigInt
+  node_id  Int
+  rate     Float  @db.Float
+  traffic  String @db.VarChar(32)
+  log_time Int
 }

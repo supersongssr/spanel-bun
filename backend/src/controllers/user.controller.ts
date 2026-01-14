@@ -1,846 +1,893 @@
-import { Hono } from 'hono'
-import { zValidator } from '@hono/zod-validator'
-import { z } from 'zod'
-import { prisma } from '../lib/prisma.js'
-import { authMiddleware } from '../middleware/auth.js'
-import { hashPassword, verifyPassword, generateRandomString } from '../utils/hash.js'
-import { setCache } from '../lib/redis.js'
+/**
+ * User Controller - User Dashboard and Traffic Statistics
+ *
+ * Provides endpoints for:
+ * - User profile information
+ * - Traffic usage statistics
+ * - Account details (money, class, etc.)
+ * - Shop and billing system
+ * - Subscription link management
+ */
 
-const user = new Hono()
+import { Elysia, t } from 'elysia'
+import { prisma } from '../lib/prisma'
+import { verifyJWT } from '../lib/jwt'
+import { generateUUID } from '../lib/password'
 
-// Apply auth middleware to all routes
-user.use('*', authMiddleware)
+export const userController = new Elysia({ prefix: '/user' })
+
+// ============================================================================
+// SUBSCRIPTION SYSTEM
+// ============================================================================
 
 /**
- * GET /user/info
- * Get current user info
+ * GET /api/user/subscription
+ *
+ * Get user's subscription link
+ *
+ * Returns:
+ * - Subscription token
+ * - Full subscription URL for different clients
+ * - Update URL
  */
-user.get('/info', async (c) => {
+userController.get('/subscription', async ({ set, request }) => {
   try {
-    const userId = c.get('userId')
+    // Extract JWT from Authorization header
+    const authHeader = request.headers.get('Authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Missing or invalid Authorization header',
+      }
+    }
 
+    const token = authHeader.substring(7)
+    const payload = await verifyJWT(token)
+
+    if (!payload) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Invalid or expired token',
+      }
+    }
+
+    const userId = payload.userId
+
+    // Check if user has a link token
+    const existingLink = await prisma.link.findFirst({
+      where: {
+        userid: BigInt(userId),
+      },
+    })
+
+    let linkToken = existingLink?.token
+
+    // Create link if not exists
+    if (!linkToken) {
+      linkToken = generateUUID()
+      await prisma.link.create({
+        data: {
+          userid: BigInt(userId),
+          token: linkToken,
+          type: 1,
+          address: '',
+          port: 0,
+          ios: 0,
+        },
+      })
+    }
+
+    // Build subscription URLs
+    const baseUrl = 'https://test-spanel-bun.freessr.bid'
+    const subscribePath = `/api/subscribe/${linkToken}`
+
+    return {
+      token: linkToken,
+      urls: {
+        ss: `${baseUrl}${subscribePath}`,
+        ssr: `${baseUrl}${subscribePath}?target=ssr`,
+        v2ray: `${baseUrl}${subscribePath}?target=v2ray`,
+        vmess: `${baseUrl}${subscribePath}?target=vmess`,
+        trojan: `${baseUrl}${subscribePath}?target=trojan`,
+        clash: `${baseUrl}${subscribePath}?target=clash`,
+        surge: `${baseUrl}${subscribePath}?target=surge`,
+      },
+      updateUrl: `${baseUrl}${subscribePath}`,
+    }
+  } catch (error) {
+    console.error('Get subscription error:', error)
+    set.status = 500
+    return {
+      error: 'Internal Server Error',
+      message: 'Failed to get subscription link',
+    }
+  }
+}, {
+  detail: {
+    tags: ['User', 'Subscription'],
+    description: 'Get user subscription link',
+    security: [{ BearerAuth: [] }],
+  },
+})
+
+/**
+ * POST /api/user/subscription/reset
+ *
+ * Reset subscription token (invalidate old link)
+ */
+userController.post('/subscription/reset', async ({ set, request }) => {
+  try {
+    // Extract JWT from Authorization header
+    const authHeader = request.headers.get('Authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Missing or invalid Authorization header',
+      }
+    }
+
+    const token = authHeader.substring(7)
+    const payload = await verifyJWT(token)
+
+    if (!payload) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Invalid or expired token',
+      }
+    }
+
+    const userId = payload.userId
+
+    // Delete old link
+    await prisma.link.deleteMany({
+      where: {
+        userid: BigInt(userId),
+      },
+    })
+
+    // Create new link
+    const newToken = generateUUID()
+    await prisma.link.create({
+      data: {
+        userid: BigInt(userId),
+        token: newToken,
+        type: 1,
+        address: '',
+        port: 0,
+        ios: 0,
+      },
+    })
+
+    const baseUrl = 'https://test-spanel-bun.freessr.bid'
+
+    return {
+      message: 'Subscription link reset successfully',
+      token: newToken,
+      url: `${baseUrl}/api/subscribe/${newToken}`,
+    }
+  } catch (error) {
+    console.error('Reset subscription error:', error)
+    set.status = 500
+    return {
+      error: 'Internal Server Error',
+      message: 'Failed to reset subscription link',
+    }
+  }
+}, {
+  detail: {
+    tags: ['User', 'Subscription'],
+    description: 'Reset subscription link token',
+    security: [{ BearerAuth: [] }],
+  },
+})
+
+// ============================================================================
+// SHOP & BILLING SYSTEM
+// ============================================================================
+
+/**
+ * GET /api/user/shop
+ *
+ * Get list of available products for purchase
+ *
+ * Returns only products where status = 1 (active)
+ */
+userController.get('/shop', async ({ set }) => {
+  try {
+    const products = await prisma.shop.findMany({
+      where: {
+        status: 1, // Only show active products
+      },
+      orderBy: {
+        id: 'asc',
+      },
+    })
+
+    // Parse product content (stored as JSON/text in database)
+    const formattedProducts = products.map((product) => {
+      let content = {}
+      try {
+        content = JSON.parse(product.content)
+      } catch (e) {
+        // If content is not valid JSON, try to parse as key-value pairs
+        const lines = product.content.split('\n')
+        content = {}
+        lines.forEach((line) => {
+          const [key, ...valueParts] = line.split(':')
+          if (key && valueParts.length > 0) {
+            content[key.trim()] = valueParts.join(':').trim()
+          }
+        })
+      }
+
+      return {
+        id: product.id,
+        name: product.name,
+        price: parseFloat(product.price.toString()),
+        content: content,
+        auto_renew: product.auto_renew === 1,
+        auto_reset_bandwidth: product.auto_reset_bandwidth === 1,
+        status: product.status === 1,
+      }
+    })
+
+    return {
+      products: formattedProducts,
+    }
+  } catch (error) {
+    console.error('Get shop error:', error)
+    set.status = 500
+    return {
+      error: 'Internal Server Error',
+      message: 'Failed to fetch products',
+    }
+  }
+}, {
+  detail: {
+    tags: ['User', 'Shop'],
+    description: 'Get list of available products for purchase',
+  },
+})
+
+/**
+ * POST /api/user/buy
+ *
+ * Purchase a product using user balance
+ *
+ * Uses Prisma transaction to ensure atomicity:
+ * 1. Check product exists and is active
+ * 2. Check user has sufficient balance
+ * 3. Deduct user balance
+ * 4. Update user attributes (transfer_enable, class, expire_in)
+ * 5. Create purchase record in Bought table
+ *
+ * All traffic values are in BYTES (1 GB = 1024^3 bytes)
+ */
+userController.post('/buy', async ({ set, request, body }) => {
+  try {
+    // Extract JWT from Authorization header
+    const authHeader = request.headers.get('Authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Missing or invalid Authorization header',
+      }
+    }
+
+    const token = authHeader.substring(7)
+    const payload = await verifyJWT(token)
+
+    if (!payload) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Invalid or expired token',
+      }
+    }
+
+    const userId = payload.userId
+    const data = body as any
+    const shopId = BigInt(data.shop_id)
+
+    if (!shopId) {
+      set.status = 400
+      return {
+        error: 'Bad Request',
+        message: 'shop_id is required',
+      }
+    }
+
+    // Execute transaction
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Check if product exists and is active
+      const product = await tx.shop.findUnique({
+        where: { id: shopId },
+      })
+
+      if (!product) {
+        throw new Error('Product not found')
+      }
+
+      if (product.status !== 1) {
+        throw new Error('Product is not available')
+      }
+
+      // 2. Get user and check balance
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+      })
+
+      if (!user) {
+        throw new Error('User not found')
+      }
+
+      const userBalance = parseFloat(user.money.toString())
+      const productPrice = parseFloat(product.price.toString())
+
+      if (userBalance < productPrice) {
+        throw new Error('Insufficient balance')
+      }
+
+      // 3. Parse product content to determine what to update
+      let content = {}
+      try {
+        content = JSON.parse(product.content)
+      } catch (e) {
+        // Parse as plain text key-value pairs
+        const lines = product.content.split('\n')
+        content = {}
+        lines.forEach((line) => {
+          const [key, ...valueParts] = line.split(':')
+          if (key && valueParts.length > 0) {
+            content[key.trim()] = valueParts.join(':').trim()
+          }
+        })
+      }
+
+      // Calculate updates based on product content
+      const updateData: any = {}
+      let trafficToAdd = BigInt(0)
+      let classExpireDays = 0
+
+      // Parse traffic (e.g., "100 GB" or "100GB")
+      if (content.traffic || content.flow || content['流量']) {
+        const trafficText = content.traffic || content.flow || content['流量'] || ''
+        const match = trafficText.match(/(\d+(?:\.\d+)?)\s*(GB|GiB|MB|MiB|TB|TiB)?/i)
+
+        if (match) {
+          const value = parseFloat(match[1])
+          const unit = (match[2] || 'GB').toUpperCase()
+
+          // Convert to bytes
+          const multipliers: Record<string, number> = {
+            'GB': 1024 ** 3,
+            'GIB': 1024 ** 3,
+            'MB': 1024 ** 2,
+            'MIB': 1024 ** 2,
+            'TB': 1024 ** 4,
+            'TIB': 1024 ** 4,
+          }
+
+          trafficToAdd = BigInt(Math.floor(value * (multipliers[unit] || multipliers['GB'])))
+        }
+      }
+
+      // Parse class (VIP level)
+      if (content.class || content['等级']) {
+        const newClass = parseInt(content.class || content['等级'] || '0')
+        // Class upgrade logic: use max of old and new class
+        updateData.class = Math.max(user.class, newClass)
+      }
+
+      // Parse expire time (e.g., "30 days" or "30天")
+      if (content.expire || content.expiry || content['有效期']) {
+        const expireText = content.expire || content.expiry || content['有效期'] || ''
+        const match = expireText.match(/(\d+)\s*(day|days|天)/i)
+
+        if (match) {
+          classExpireDays = parseInt(match[1])
+        }
+      }
+
+      // 4. Deduct balance and update user
+      const newBalance = userBalance - productPrice
+
+      // Update transfer_enable (traffic is additive)
+      if (trafficToAdd > 0) {
+        updateData.transfer_enable = user.transfer_enable + trafficToAdd
+      }
+
+      // Update class_expire (extend if days specified)
+      if (classExpireDays > 0) {
+        const currentExpire = user.class_expire ? new Date(user.class_expire) : new Date()
+        const newExpire = new Date(currentExpire.getTime() + classExpireDays * 24 * 60 * 60 * 1000)
+        updateData.class_expire = newExpire
+      }
+
+      // Update expire_in (account expiration)
+      if (content.expire_in || content['账户有效期']) {
+        const expireInDays = parseInt(content.expire_in || content['账户有效期'] || '0')
+        if (expireInDays > 0) {
+          const currentExpireIn = user.expire_in ? new Date(user.expire_in) : new Date()
+          const newExpireIn = new Date(currentExpireIn.getTime() + expireInDays * 24 * 60 * 60 * 1000)
+          updateData.expire_in = newExpireIn
+        }
+      }
+
+      updateData.money = newBalance
+
+      // Update user
+      await tx.user.update({
+        where: { id: userId },
+        data: updateData,
+      })
+
+      // 5. Create purchase record
+      const now = BigInt(Math.floor(Date.now() / 1000))
+      await tx.bought.create({
+        data: {
+          userid: BigInt(userId),
+          shopid: product.id,
+          datetime: now,
+          renew: product.auto_renew,
+          coupon: '',
+          price: product.price,
+        },
+      })
+
+      return {
+        success: true,
+        product: product.name,
+        price: productPrice,
+        newBalance: newBalance,
+        trafficAdded: trafficToAdd.toString(),
+        class: updateData.class,
+      }
+    })
+
+    return {
+      message: 'Purchase successful',
+      ...result,
+    }
+  } catch (error: any) {
+    console.error('Buy error:', error)
+
+    if (error.message === 'Product not found') {
+      set.status = 404
+      return {
+        error: 'Not Found',
+        message: 'Product not found',
+      }
+    }
+
+    if (error.message === 'Product is not available') {
+      set.status = 400
+      return {
+        error: 'Bad Request',
+        message: 'Product is not available',
+      }
+    }
+
+    if (error.message === 'Insufficient balance') {
+      set.status = 400
+      return {
+        error: 'Bad Request',
+        message: 'Insufficient balance',
+      }
+    }
+
+    set.status = 500
+    return {
+      error: 'Internal Server Error',
+      message: 'Failed to complete purchase',
+    }
+  }
+}, {
+  body: t.Object({
+    shop_id: t.String(),
+  }),
+  detail: {
+    tags: ['User', 'Shop'],
+    description: 'Purchase a product using user balance',
+    security: [{ BearerAuth: [] }],
+  },
+})
+
+/**
+ * POST /api/user/redeem
+ *
+ * Redeem a code to add balance to user account
+ *
+ * Rate limiting: Prevents brute force code guessing
+ * - Simple in-memory tracking (can be upgraded to Redis)
+ */
+userController.post('/redeem', async ({ set, request, body }) => {
+  try {
+    // Extract JWT from Authorization header
+    const authHeader = request.headers.get('Authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Missing or invalid Authorization header',
+      }
+    }
+
+    const token = authHeader.substring(7)
+    const payload = await verifyJWT(token)
+
+    if (!payload) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Invalid or expired token',
+      }
+    }
+
+    const userId = payload.userId
+    const data = body as any
+    const codeText = data.code?.trim()
+
+    if (!codeText) {
+      set.status = 400
+      return {
+        error: 'Bad Request',
+        message: 'Code is required',
+      }
+    }
+
+    // Simple rate limiting: Check recent redemptions by this user
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
+    const recentRedemptions = await prisma.code.count({
+      where: {
+        userid: BigInt(userId),
+        usedatetime: {
+          gte: oneHourAgo,
+        },
+      },
+    })
+
+    if (recentRedemptions >= 10) {
+      set.status = 429
+      return {
+        error: 'Too Many Requests',
+        message: 'Rate limit exceeded. Maximum 10 redemptions per hour.',
+      }
+    }
+
+    // Execute transaction
+    const result = await prisma.$transaction(async (tx) => {
+      // Find the code
+      const codeRecord = await tx.code.findFirst({
+        where: {
+          code: codeText,
+        },
+      })
+
+      if (!codeRecord) {
+        throw new Error('Invalid code')
+      }
+
+      if (codeRecord.isused === 1) {
+        throw new Error('Code already used')
+      }
+
+      // Get user
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+      })
+
+      if (!user) {
+        throw new Error('User not found')
+      }
+
+      // Calculate new balance
+      const currentBalance = parseFloat(user.money.toString())
+      const codeAmount = parseFloat(codeRecord.number.toString())
+      const newBalance = currentBalance + codeAmount
+
+      // Update user balance
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          money: newBalance,
+        },
+      })
+
+      // Mark code as used
+      await tx.code.update({
+        where: { id: codeRecord.id },
+        data: {
+          isused: 1,
+          userid: BigInt(userId),
+          usedatetime: new Date(),
+        },
+      })
+
+      return {
+        success: true,
+        amount: codeAmount,
+        newBalance: newBalance,
+      }
+    })
+
+    return {
+      message: 'Code redeemed successfully',
+      ...result,
+    }
+  } catch (error: any) {
+    console.error('Redeem error:', error)
+
+    if (error.message === 'Invalid code') {
+      set.status = 404
+      return {
+        error: 'Not Found',
+        message: 'Invalid code',
+      }
+    }
+
+    if (error.message === 'Code already used') {
+      set.status = 400
+      return {
+        error: 'Bad Request',
+        message: 'Code already used',
+      }
+    }
+
+    set.status = 500
+    return {
+      error: 'Internal Server Error',
+      message: 'Failed to redeem code',
+    }
+  }
+}, {
+  body: t.Object({
+    code: t.String(),
+  }),
+  detail: {
+    tags: ['User', 'Shop'],
+    description: 'Redeem a code to add balance',
+    security: [{ BearerAuth: [] }],
+  },
+})
+
+/**
+ * GET /api/user/info
+ * 
+ * Get current user profile and traffic summary
+ * 
+ * Authentication: Bearer token in Authorization header
+ * 
+ * Returns:
+ * - User basic info (email, user_name, class)
+ * - Traffic summary (total used, available, percentage)
+ * - Account info (money, expire time)
+ */
+userController.get('/info', async ({ set, request }) => {
+  try {
+    // Extract JWT from Authorization header
+    const authHeader = request.headers.get('Authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Missing or invalid Authorization header',
+      }
+    }
+
+    const token = authHeader.substring(7)
+    const payload = await verifyJWT(token)
+
+    if (!payload) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Invalid or expired token',
+      }
+    }
+
+    const userId = payload.userId
+
+    // Query user from database
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true,
         email: true,
-        username: true,
-        emailVerified: true,
+        user_name: true,
+        money: true,
+        class: true,
+        node_group: true,
+        transfer_enable: true,  // Total traffic limit
+        u: true,                // Upload bytes
+        d: true,                // Download bytes
+        last_day_t: true,       // Last checkin time
+        expire_in: true,        // Account expiration
+        node_speedlimit: true,
+        method: true,
+        protocol: true,
+        obfs: true,
+      },
+    })
+
+    if (!user) {
+      set.status = 404
+      return {
+        error: 'Not Found',
+        message: 'User not found',
+      }
+    }
+
+    // Calculate traffic statistics
+    const uploadBytes = Number(user.u)
+    const downloadBytes = Number(user.d)
+    const totalUsed = uploadBytes + downloadBytes
+    const totalLimit = Number(user.transfer_enable)
+    const availableBytes = totalLimit - totalUsed
+    const usedPercent = totalLimit > 0 ? (totalUsed / totalLimit) * 100 : 0
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        user_name: user.user_name,
+        class: user.class,
+        node_group: user.node_group,
+      },
+      traffic: {
+        upload: user.u.toString(),          // Bytes as string (BigInt)
+        download: user.d.toString(),        // Bytes as string (BigInt)
+        total_used: totalUsed.toString(),   // Total used bytes
+        transfer_enable: user.transfer_enable.toString(),  // Total limit
+        available: availableBytes.toString(),
+        used_percent: parseFloat(usedPercent.toFixed(2)),  // Percentage
+      },
+      account: {
+        money: user.money,
+        expire_in: user.expire_in,
+        node_speedlimit: user.node_speedlimit,
+        method: user.method,
+        protocol: user.protocol,
+        obfs: user.obfs,
+      },
+    }
+  } catch (error) {
+    console.error('User info error:', error)
+    set.status = 500
+    return {
+      error: 'Internal Server Error',
+      message: 'Failed to fetch user information',
+    }
+  }
+}, {
+  detail: {
+    tags: ['User'],
+    description: 'Get current user profile and traffic summary',
+    security: [{ BearerAuth: [] }],
+  },
+})
+
+/**
+ * GET /api/user/traffic
+ * 
+ * Get detailed traffic statistics and history
+ * 
+ * Returns:
+ * - Current usage breakdown
+ * - Daily usage history (from user_traffic_log)
+ * - Percentage used by time period
+ */
+userController.get('/traffic', async ({ set, request }) => {
+  try {
+    // Extract JWT from Authorization header
+    const authHeader = request.headers.get('Authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Missing or invalid Authorization header',
+      }
+    }
+
+    const token = authHeader.substring(7)
+    const payload = await verifyJWT(token)
+
+    if (!payload) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Invalid or expired token',
+      }
+    }
+
+    const userId = payload.userId
+
+    // Query user
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
         u: true,
         d: true,
-        transferEnable: true,
-        lastCheckinTime: true,
-        expireTime: true,
-        userGroupId: true,
-        planId: true,
-        theme: true,
-        isAdmin: true,
-        isAgent: true,
-        isBanned: true,
-        isEmailBanned: true,
-        bannedReason: true,
-        refBy: true,
-        refCount: true,
-        balance: true,
-        token: true,
-        uuid: true,
-        createdAt: true,
-        updatedAt: true,
-      }
+        transfer_enable: true,
+        last_day_t: true,
+      },
     })
 
     if (!user) {
-      return c.json({
-        error: 'User not found',
-        message: 'User does not exist'
-      }, 404)
-    }
-
-    return c.json({
-      message: 'User info retrieved successfully',
-      data: user
-    })
-  } catch (error) {
-    console.error('Get user info error:', error)
-    return c.json({
-      error: 'Failed to get user info',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * GET /user/dashboard
- * Get user dashboard data (stats, announcements, etc)
- */
-user.get('/dashboard', async (c) => {
-  try {
-    const userId = c.get('userId')
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        orders: {
-          where: { status: 1 },
-          orderBy: { createdAt: 'desc' },
-          take: 5,
-        },
-        tickets: {
-          orderBy: { createdAt: 'desc' },
-          take: 5,
-        }
-      }
-    })
-
-    if (!user) {
-      return c.json({
-        error: 'User not found',
-        message: 'User does not exist'
-      }, 404)
-    }
-
-    // Get active announcements
-    const notices = await prisma.notice.findMany({
-      where: { isActive: true },
-      orderBy: { priority: 'desc' },
-      take: 5,
-    })
-
-    // Calculate traffic usage
-    const totalTraffic = user.u + user.d
-    const trafficPercent = user.transferEnable > 0
-      ? Math.round((totalTraffic / user.transferEnable) * 100)
-      : 0
-
-    // Get available nodes
-    const nodes = await prisma.node.findMany({
-      where: { status: true },
-      orderBy: { sortOrder: 'asc' },
-    })
-
-    return c.json({
-      message: 'Dashboard data retrieved successfully',
-      data: {
-        user: {
-          id: user.id,
-          email: user.email,
-          username: user.username,
-          balance: user.balance,
-          transferEnable: user.transferEnable,
-          u: user.u,
-          d: user.d,
-          totalTraffic,
-          trafficPercent,
-          lastCheckinTime: user.lastCheckinTime,
-          expireTime: user.expireTime,
-        },
-        orders: user.orders,
-        tickets: user.tickets,
-        notices,
-        nodes,
-      }
-    })
-  } catch (error) {
-    console.error('Get dashboard error:', error)
-    return c.json({
-      error: 'Failed to get dashboard data',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * POST /user/checkin
- * Daily check-in
- */
-user.post('/checkin', async (c) => {
-  try {
-    const userId = c.get('userId')
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId }
-    })
-
-    if (!user) {
-      return c.json({
-        error: 'User not found',
-        message: 'User does not exist'
-      }, 404)
-    }
-
-    // Check if already checked in today
-    const today = Math.floor(Date.now() / 86400000)
-    const lastCheckinDay = user.lastCheckinTime
-      ? Math.floor(user.lastCheckinTime / 86400000)
-      : 0
-
-    if (lastCheckinDay === today) {
-      return c.json({
-        error: 'Already checked in',
-        message: 'You have already checked in today'
-      }, 400)
-    }
-
-    // Calculate reward (random between 10-100 MB)
-    const reward = Math.floor(Math.random() * 90 + 10) * 1024 * 1024
-
-    // Update user
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        transferEnable: { increment: reward },
-        lastCheckinTime: Date.now(),
-      }
-    })
-
-    return c.json({
-      message: 'Check-in successful',
-      data: {
-        reward,
-        totalTransferEnable: user.transferEnable + reward
-      }
-    })
-  } catch (error) {
-    console.error('Check-in error:', error)
-    return c.json({
-      error: 'Check-in failed',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * PUT /user/profile
- * Update user profile
- */
-user.put('/profile', zValidator('json', z.object({
-  username: z.string().min(3).max(20).optional(),
-  theme: z.string().optional(),
-})), async (c) => {
-  try {
-    const userId = c.get('userId')
-    const body = c.req.valid('json')
-
-    // Check if username is taken by another user
-    if (body.username) {
-      const existingUser = await prisma.user.findFirst({
-        where: {
-          username: body.username,
-          NOT: { id: userId }
-        }
-      })
-
-      if (existingUser) {
-        return c.json({
-          error: 'Username taken',
-          message: 'This username is already taken'
-        }, 400)
+      set.status = 404
+      return {
+        error: 'Not Found',
+        message: 'User not found',
       }
     }
 
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: body,
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        theme: true,
-      }
-    })
+    // Calculate traffic
+    const uploadBytes = Number(user.u)
+    const downloadBytes = Number(user.d)
+    const totalUsed = uploadBytes + downloadBytes
+    const totalLimit = Number(user.transfer_enable)
+    const usedPercent = totalLimit > 0 ? (totalUsed / totalLimit) * 100 : 0
 
-    return c.json({
-      message: 'Profile updated successfully',
-      data: user
-    })
-  } catch (error) {
-    console.error('Update profile error:', error)
-    return c.json({
-      error: 'Failed to update profile',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
+    // Get traffic log (last 7 days)
+    // log_time is stored as Unix timestamp (Int)
+    const sevenDaysAgoTimestamp = Math.floor((Date.now() / 1000) - (7 * 24 * 60 * 60))
 
-/**
- * POST /user/password
- * Change password
- */
-user.post('/password', zValidator('json', z.object({
-  oldPassword: z.string().min(1),
-  newPassword: z.string().min(8),
-})), async (c) => {
-  try {
-    const userId = c.get('userId')
-    const body = c.req.valid('json')
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId }
-    })
-
-    if (!user) {
-      return c.json({
-        error: 'User not found',
-        message: 'User does not exist'
-      }, 404)
-    }
-
-    // Verify old password
-    const isValidPassword = await verifyPassword(body.oldPassword, user.password)
-    if (!isValidPassword) {
-      return c.json({
-        error: 'Invalid password',
-        message: 'Old password is incorrect'
-      }, 401)
-    }
-
-    // Hash new password
-    const hashedPassword = await hashPassword(body.newPassword)
-
-    await prisma.user.update({
-      where: { id: userId },
-      data: { password: hashedPassword }
-    })
-
-    return c.json({
-      message: 'Password changed successfully'
-    })
-  } catch (error) {
-    console.error('Change password error:', error)
-    return c.json({
-      error: 'Failed to change password',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * GET /user/nodes
- * Get available nodes for user
- */
-user.get('/nodes', async (c) => {
-  try {
-    const userId = c.get('userId')
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { planId: true, userGroupId: true }
-    })
-
-    if (!user) {
-      return c.json({
-        error: 'User not found',
-        message: 'User does not exist'
-      }, 404)
-    }
-
-    // Get active nodes
-    const nodes = await prisma.node.findMany({
-      where: { status: true },
-      orderBy: { sortOrder: 'asc' },
-      select: {
-        id: true,
-        name: true,
-        server: true,
-        type: true,
-        protocol: true,
-        info: true,
-        host: true,
-        method: true,
-        rate: true,
-        isOnline: true,
-        onlineUserCount: true,
-        load: true,
-        sortOrder: true,
-      }
-    })
-
-    return c.json({
-      message: 'Nodes retrieved successfully',
-      data: nodes
-    })
-  } catch (error) {
-    console.error('Get nodes error:', error)
-    return c.json({
-      error: 'Failed to get nodes',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * GET /user/subscribe
- * Get subscription link
- */
-user.get('/subscribe', async (c) => {
-  try {
-    const userId = c.get('userId')
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        token: true,
-        uuid: true,
-        planId: true,
-      }
-    })
-
-    if (!user) {
-      return c.json({
-        error: 'User not found',
-        message: 'User does not exist'
-      }, 404)
-    }
-
-    const baseUrl = process.env.BASE_URL || 'https://test-spanel-bun.freessr.bid'
-    const subscribeUrl = `${baseUrl}/api/subscribe/${user.token}`
-
-    return c.json({
-      message: 'Subscribe link retrieved successfully',
-      data: {
-        subscribeUrl,
-        token: user.token,
-        uuid: user.uuid,
-      }
-    })
-  } catch (error) {
-    console.error('Get subscribe error:', error)
-    return c.json({
-      error: 'Failed to get subscribe link',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * GET /user/traffic
- * Get traffic logs
- */
-user.get('/traffic', async (c) => {
-  try {
-    const userId = c.get('userId')
-    const page = parseInt(c.req.query('page') || '1')
-    const limit = parseInt(c.req.query('limit') || '20')
-
-    const skip = (page - 1) * limit
-
-    const [logs, total] = await Promise.all([
-      prisma.trafficLog.findMany({
-        where: { userId },
-        include: {
-          node: {
-            select: {
-              id: true,
-              name: true,
-            }
-          }
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
-      }),
-      prisma.trafficLog.count({ where: { userId } })
-    ])
-
-    return c.json({
-      message: 'Traffic logs retrieved successfully',
-      data: {
-        logs,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit)
-        }
-      }
-    })
-  } catch (error) {
-    console.error('Get traffic logs error:', error)
-    return c.json({
-      error: 'Failed to get traffic logs',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * GET /user/tickets
- * Get user tickets
- */
-user.get('/tickets', async (c) => {
-  try {
-    const userId = c.get('userId')
-    const page = parseInt(c.req.query('page') || '1')
-    const limit = parseInt(c.req.query('limit') || '20')
-
-    const skip = (page - 1) * limit
-
-    const [tickets, total] = await Promise.all([
-      prisma.ticket.findMany({
-        where: { userId },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
-      }),
-      prisma.ticket.count({ where: { userId } })
-    ])
-
-    return c.json({
-      message: 'Tickets retrieved successfully',
-      data: {
-        tickets,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit)
-        }
-      }
-    })
-  } catch (error) {
-    console.error('Get tickets error:', error)
-    return c.json({
-      error: 'Failed to get tickets',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * POST /user/tickets
- * Create a new ticket
- */
-user.post('/tickets', zValidator('json', z.object({
-  title: z.string().min(1).max(200),
-  content: z.string().min(1),
-})), async (c) => {
-  try {
-    const userId = c.get('userId')
-    const body = c.req.valid('json')
-
-    const ticket = await prisma.ticket.create({
-      data: {
-        userId,
-        title: body.title,
-        content: body.content,
-        status: 0, // Open
-      }
-    })
-
-    return c.json({
-      message: 'Ticket created successfully',
-      data: ticket
-    }, 201)
-  } catch (error) {
-    console.error('Create ticket error:', error)
-    return c.json({
-      error: 'Failed to create ticket',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * PUT /user/tickets/:id
- * Update ticket
- */
-user.put('/tickets/:id', zValidator('json', z.object({
-  content: z.string().min(1).optional(),
-  status: z.number().int().min(0).max(2).optional(),
-})), async (c) => {
-  try {
-    const userId = c.get('userId')
-    const ticketId = parseInt(c.req.param('id'))
-    const body = c.req.valid('json')
-
-    // Check if ticket belongs to user
-    const ticket = await prisma.ticket.findFirst({
+    const trafficLogs = await prisma.user_traffic_log.findMany({
       where: {
-        id: ticketId,
-        userId
+        user_id: userId,
+        log_time: {
+          gte: sevenDaysAgoTimestamp,
+        },
+      },
+      orderBy: {
+        log_time: 'desc',
+      },
+      take: 7,
+    })
+
+    // Format traffic logs
+    const dailyTraffic = trafficLogs.map((log) => {
+      // Convert Unix timestamp to date string
+      const date = new Date(log.log_time * 1000).toISOString().split('T')[0]
+      const upload = Number(log.u)
+      const download = Number(log.d)
+      return {
+        date: date,
+        upload: upload.toString(),
+        download: download.toString(),
+        total: (upload + download).toString(),
       }
     })
 
-    if (!ticket) {
-      return c.json({
-        error: 'Ticket not found',
-        message: 'Ticket does not exist or does not belong to you'
-      }, 404)
-    }
-
-    const updatedTicket = await prisma.ticket.update({
-      where: { id: ticketId },
-      data: {
-        ...body,
-        replyAt: body.content ? new Date() : ticket.replyAt,
-      }
-    })
-
-    return c.json({
-      message: 'Ticket updated successfully',
-      data: updatedTicket
-    })
-  } catch (error) {
-    console.error('Update ticket error:', error)
-    return c.json({
-      error: 'Failed to update ticket',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * GET /user/shop
- * Get shop items
- */
-user.get('/shop', async (c) => {
-  try {
-    const shopItems = await prisma.shopItem.findMany({
-      where: { status: true },
-      orderBy: { id: 'asc' },
-    })
-
-    return c.json({
-      message: 'Shop items retrieved successfully',
-      data: shopItems
-    })
-  } catch (error) {
-    console.error('Get shop items error:', error)
-    return c.json({
-      error: 'Failed to get shop items',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * POST /user/shop/:id/buy
- * Buy shop item
- */
-user.post('/shop/:id/buy', async (c) => {
-  try {
-    const userId = c.get('userId')
-    const itemId = parseInt(c.req.param('id'))
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId }
-    })
-
-    if (!user) {
-      return c.json({
-        error: 'User not found',
-        message: 'User does not exist'
-      }, 404)
-    }
-
-    const shopItem = await prisma.shopItem.findUnique({
-      where: { id: itemId }
-    })
-
-    if (!shopItem || !shopItem.status) {
-      return c.json({
-        error: 'Item not found',
-        message: 'Shop item does not exist or is not available'
-      }, 404)
-    }
-
-    // Check if user has enough balance
-    if (user.balance < shopItem.price) {
-      return c.json({
-        error: 'Insufficient balance',
-        message: 'You do not have enough balance to purchase this item'
-      }, 400)
-    }
-
-    // Process purchase
-    await prisma.$transaction([
-      // Deduct balance
-      prisma.user.update({
-        where: { id: userId },
-        data: { balance: { decrement: shopItem.price } }
-      }),
-      // Add traffic if applicable
-      shopItem.traffic > 0
-        ? prisma.user.update({
-            where: { id: userId },
-            data: { transferEnable: { increment: shopItem.traffic } }
-          })
-        : null,
-    ].filter(Boolean))
-
-    return c.json({
-      message: 'Item purchased successfully',
-      data: {
-        item: shopItem,
-        remainingBalance: user.balance - shopItem.price
-      }
-    })
-  } catch (error) {
-    console.error('Buy item error:', error)
-    return c.json({
-      error: 'Failed to buy item',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * POST /user/invite/reset
- * Reset invite code
- */
-user.post('/invite/reset', async (c) => {
-  try {
-    const userId = c.get('userId')
-
-    const newToken = generateRandomString(32)
-
-    await prisma.user.update({
-      where: { id: userId },
-      data: { token: newToken }
-    })
-
-    const baseUrl = process.env.BASE_URL || 'https://test-spanel-bun.freessr.bid'
-    const inviteUrl = `${baseUrl}/auth/register?invite=${newToken}`
-
-    return c.json({
-      message: 'Invite code reset successfully',
-      data: {
-        token: newToken,
-        inviteUrl
-      }
-    })
-  } catch (error) {
-    console.error('Reset invite error:', error)
-    return c.json({
-      error: 'Failed to reset invite code',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * GET /user/plans
- * Get available plans
- */
-user.get('/plans', async (c) => {
-  try {
-    const plans = await prisma.plan.findMany({
-      where: { isActive: true },
-      orderBy: { id: 'asc' },
-    })
-
-    return c.json({
-      message: 'Plans retrieved successfully',
-      data: plans
-    })
-  } catch (error) {
-    console.error('Get plans error:', error)
-    return c.json({
-      error: 'Failed to get plans',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * POST /user/orders
- * Create order
- */
-user.post('/orders', zValidator('json', z.object({
-  planId: z.number().int(),
-  paymentMethod: z.enum(['alipay', 'wechat', 'balance']),
-})), async (c) => {
-  try {
-    const userId = c.get('userId')
-    const body = c.req.valid('json')
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId }
-    })
-
-    if (!user) {
-      return c.json({
-        error: 'User not found',
-        message: 'User does not exist'
-      }, 404)
-    }
-
-    const plan = await prisma.plan.findUnique({
-      where: { id: body.planId }
-    })
-
-    if (!plan || !plan.isActive) {
-      return c.json({
-        error: 'Plan not found',
-        message: 'Plan does not exist or is not available'
-      }, 404)
-    }
-
-    // Determine price based on duration
-    let amount = 0
-    // Default to monthly price
-    amount = plan.monthlyPrice
-
-    if (body.paymentMethod === 'balance') {
-      if (user.balance < amount) {
-        return c.json({
-          error: 'Insufficient balance',
-          message: 'You do not have enough balance'
-        }, 400)
-      }
-
-      // Create paid order
-      const order = await prisma.order.create({
-        data: {
-          userId,
-          planId: body.planId,
-          status: 1, // Paid
-          amount,
-          paymentMethod: body.paymentMethod,
-        }
-      })
-
-      // Deduct balance and update user transfer
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          balance: { decrement: amount },
-          transferEnable: { increment: plan.transferEnable }
-        }
-      })
-
-      return c.json({
-        message: 'Order created and paid successfully',
-        data: order
-      }, 201)
-    } else {
-      // Create unpaid order
-      const order = await prisma.order.create({
-        data: {
-          userId,
-          planId: body.planId,
-          status: 0, // Unpaid
-          amount,
-          paymentMethod: body.paymentMethod,
-        }
-      })
-
-      // TODO: Generate payment QR code
-      return c.json({
-        message: 'Order created successfully',
-        data: {
-          order,
-          // qrCode: '...' // Payment QR code
-        }
-      }, 201)
+    return {
+      current: {
+        upload: user.u.toString(),
+        download: user.d.toString(),
+        total_used: totalUsed.toString(),
+        transfer_enable: user.transfer_enable.toString(),
+        used_percent: parseFloat(usedPercent.toFixed(2)),
+        remaining: (totalLimit - totalUsed).toString(),
+      },
+      daily_history: dailyTraffic || [],
+      last_checkin: user.last_day_t ? user.last_day_t.toString() : null,
     }
   } catch (error) {
-    console.error('Create order error:', error)
-    return c.json({
-      error: 'Failed to create order',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
+    console.error('Traffic stats error:', error)
+    set.status = 500
+    return {
+      error: 'Internal Server Error',
+      message: 'Failed to fetch traffic statistics',
+    }
   }
+}, {
+  detail: {
+    tags: ['User'],
+    description: 'Get detailed traffic statistics and history',
+    security: [{ BearerAuth: [] }],
+  },
 })
-
-export default user

@@ -1,69 +1,45 @@
-import { Context, Next } from 'hono'
-import { verifyToken, extractToken } from '../utils/jwt.js'
-
 /**
- * Authentication middleware - verify JWT token
+ * Authentication Middleware - JWT Verification
+ * 
+ * Extracts and verifies JWT token from Authorization header
+ * Injects userId and user info into request context
  */
-export async function authMiddleware(c: Context, next: Next) {
-  try {
-    const token = extractToken(c)
 
-    if (!token) {
-      return c.json({
+import { Elysia } from 'elysia'
+
+export const authMiddleware = new Elysia({ name: 'auth-middleware' })
+  .derive(async ({ jwt, request, set }) => {
+    // Extract Authorization header
+    const authHeader = request.headers.get('Authorization')
+    
+    // Check if header exists and has Bearer token
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      set.status = 401
+      return {
         error: 'Unauthorized',
-        message: 'No token provided'
-      }, 401)
+        message: 'Missing or invalid Authorization header',
+      }
     }
 
-    const payload = await verifyToken(token)
-
-    // Attach user info to context
-    c.set('userId', payload.userId)
-    c.set('userEmail', payload.email)
-    c.set('isAdmin', payload.isAdmin)
-
-    await next()
-  } catch (error) {
-    return c.json({
-      error: 'Unauthorized',
-      message: 'Invalid or expired token'
-    }, 401)
-  }
-}
-
-/**
- * Admin only middleware
- */
-export async function adminMiddleware(c: Context, next: Next) {
-  const isAdmin = c.get('isAdmin')
-
-  if (!isAdmin) {
-    return c.json({
-      error: 'Forbidden',
-      message: 'Admin access required'
-    }, 403)
-  }
-
-  await next()
-}
-
-/**
- * Optional auth middleware - attach user info if token exists
- */
-export async function optionalAuthMiddleware(c: Context, next: Next) {
-  try {
-    const token = extractToken(c)
-
-    if (token) {
-      const payload = await verifyToken(token)
-      c.set('userId', payload.userId)
-      c.set('userEmail', payload.email)
-      c.set('isAdmin', payload.isAdmin)
+    // Extract token (remove "Bearer " prefix)
+    const token = authHeader.substring(7)
+    
+    // Verify token
+    const payload = await jwt.verify(token)
+    
+    if (!payload) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Invalid or expired token',
+      }
     }
 
-    await next()
-  } catch (error) {
-    // Continue without auth
-    await next()
-  }
-}
+    // Inject user info into context
+    return {
+      userId: (payload as any).userId as number,
+      userEmail: (payload as any).email as string,
+      userName: (payload as any).user_name as string,
+      isAdmin: (payload as any).isAdmin as boolean,
+    }
+  })

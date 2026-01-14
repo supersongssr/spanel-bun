@@ -1,344 +1,270 @@
-import { Hono } from 'hono'
-import { zValidator } from '@hono/zod-validator'
-import { z } from 'zod'
-import { prisma } from '../lib/prisma.js'
-import { authMiddleware, adminMiddleware } from '../middleware/auth.js'
+/**
+ * Node Controller - Node List and Status
+ *
+ * Provides endpoints for:
+ * - Node list with filtering by user class/group
+ * - Individual node details
+ * - Online user count
+ */
 
-const node = new Hono()
+import { Elysia, t } from 'elysia'
+import { prisma } from '../lib/prisma'
+import { verifyJWT } from '../lib/jwt'
+
+export const nodeController = new Elysia()
 
 /**
- * GET /node/list
- * Get node list (public or authenticated)
+ * GET /api/user/nodes
+ * 
+ * Get list of nodes available to current user
+ * 
+ * Filtering logic:
+ * - Nodes with type > 0 (user-visible)
+ * - Nodes with node_online = 1 (online)
+ * - User.class must meet node_class requirement
+ * - User.node_group must match node_group (if > 0)
+ * 
+ * Returns:
+ * - Array of nodes with server info, rate, online users
  */
-node.get('/list', async (c) => {
+nodeController.get('/nodes', async ({ set, request }) => {
   try {
-    const nodes = await prisma.node.findMany({
-      where: { status: true },
-      orderBy: { sortOrder: 'asc' },
-      select: {
-        id: true,
-        name: true,
-        server: true,
-        type: true,
-        protocol: true,
-        info: true,
-        host: true,
-        method: true,
-        rate: true,
-        isOnline: true,
-        onlineUserCount: true,
-        load: true,
-        sortOrder: true,
+    // Extract JWT from Authorization header
+    const authHeader = request.headers.get('Authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Missing or invalid Authorization header',
       }
-    })
-
-    return c.json({
-      message: 'Nodes retrieved successfully',
-      data: nodes
-    })
-  } catch (error) {
-    console.error('Get nodes error:', error)
-    return c.json({
-      error: 'Failed to get nodes',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * GET /node/:id
- * Get node details
- */
-node.get('/:id', async (c) => {
-  try {
-    const nodeId = parseInt(c.req.param('id'))
-
-    const node = await prisma.node.findUnique({
-      where: { id: nodeId },
-      select: {
-        id: true,
-        name: true,
-        server: true,
-        type: true,
-        protocol: true,
-        info: true,
-        host: true,
-        method: true,
-        rate: true,
-        isOnline: true,
-        onlineUserCount: true,
-        load: true,
-        sortOrder: true,
-        muPort: true,
-        muRegex: true,
-        createdAt: true,
-        updatedAt: true,
-      }
-    })
-
-    if (!node) {
-      return c.json({
-        error: 'Node not found',
-        message: 'Node does not exist'
-      }, 404)
     }
 
-    return c.json({
-      message: 'Node retrieved successfully',
-      data: node
-    })
-  } catch (error) {
-    console.error('Get node error:', error)
-    return c.json({
-      error: 'Failed to get node',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
+    const token = authHeader.substring(7)
+    const payload = await verifyJWT(token)
 
-/**
- * POST /node/mu/users/:id/traffic
- * Mu API - Report user traffic
- * Note: This should be secured with mu key in production
- */
-node.post('/mu/users/:id/traffic', zValidator('json', z.object({
-  u: z.number().int().min(0),
-  d: z.number().int().min(0),
-})), async (c) => {
-  try {
-    const userId = parseInt(c.req.param('id'))
-    const body = c.req.valid('json')
+    if (!payload) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Invalid or expired token',
+      }
+    }
 
-    // TODO: Verify mu key from headers or env
-    // const muKey = c.req.header('X-Mu-Key')
-    // if (muKey !== process.env.MU_KEY) {
-    //   return c.json({ error: 'Unauthorized' }, 401)
-    // }
+    const userId = payload.userId
 
+    // Get user info for filtering
     const user = await prisma.user.findUnique({
-      where: { id: userId }
+      where: { id: userId },
+      select: {
+        class: true,
+        node_group: true,
+      },
     })
 
     if (!user) {
-      return c.json({
-        error: 'User not found',
-        message: 'User does not exist'
-      }, 404)
+      set.status = 404
+      return {
+        error: 'Not Found',
+        message: 'User not found',
+      }
     }
 
-    // Update user traffic
-    await prisma.user.update({
+    // Query all user-visible nodes
+    const nodes = await prisma.ss_node.findMany({
+      where: {
+        type: { gt: 0 },  // User-visible nodes
+        node_online: 1,   // Online nodes only
+      },
+      select: {
+        id: true,
+        name: true,
+        server: true,
+        method: true,
+        type: true,
+        node_class: true,
+        node_group: true,
+        traffic_rate: true,
+        status: true,
+        info: true,
+      },
+    })
+
+    // Filter by user class and node_group
+    const filteredNodes = nodes.filter((node: any) => {
+      // Check class requirement
+      if (node.node_class > 0 && user.class < node.node_class) {
+        return false
+      }
+
+      // Check group requirement (if node requires specific group)
+      if (node.node_group > 0 && user.node_group !== node.node_group) {
+        return false
+      }
+
+      return true
+    })
+
+    // Format nodes for response
+    const formattedNodes = filteredNodes.map((node: any) => ({
+      id: node.id,
+      name: node.name,
+      server: node.server,
+      method: node.method,
+      type: node.type,  // 1=SS, 2=SSR, 11=V2Ray, etc.
+      traffic_rate: node.traffic_rate,
+      status: node.status,
+      info: node.info,
+    }))
+
+    return {
+      nodes: formattedNodes,
+      total: formattedNodes.length,
+      user_class: user.class,
+      user_node_group: user.node_group,
+    }
+  } catch (error) {
+    console.error('Node list error:', error)
+    set.status = 500
+    return {
+      error: 'Internal Server Error',
+      message: 'Failed to fetch node list',
+    }
+  }
+}, {
+  detail: {
+    tags: ['Node'],
+    description: 'Get list of available nodes for current user',
+    security: [{ BearerAuth: [] }],
+  },
+})
+
+/**
+ * GET /api/user/nodes/:id
+ * 
+ * Get detailed information about a specific node
+ * 
+ * Parameters:
+ * - id: Node ID
+ */
+nodeController.get('/nodes/:id', async ({ set, request, params }) => {
+  try {
+    // Extract JWT from Authorization header
+    const authHeader = request.headers.get('Authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Missing or invalid Authorization header',
+      }
+    }
+
+    const token = authHeader.substring(7)
+    const payload = await verifyJWT(token)
+
+    if (!payload) {
+      set.status = 401
+      return {
+        error: 'Unauthorized',
+        message: 'Invalid or expired token',
+      }
+    }
+
+    const userId = payload.userId
+    const nodeId = parseInt(params.id)
+
+    if (isNaN(nodeId)) {
+      set.status = 400
+      return {
+        error: 'Bad Request',
+        message: 'Invalid node ID',
+      }
+    }
+
+    // Get user info for access control
+    const user = await prisma.user.findUnique({
       where: { id: userId },
-      data: {
-        u: { increment: body.u },
-        d: { increment: body.d },
-      }
+      select: {
+        class: true,
+        node_group: true,
+      },
     })
 
-    // Create traffic log
-    await prisma.trafficLog.create({
-      data: {
-        userId,
-        nodeId: 0, // Will be updated with actual node ID
-        u: body.u,
-        d: body.d,
-        rate: 1.0,
-        timestamp: Math.floor(Date.now() / 1000),
+    if (!user) {
+      set.status = 404
+      return {
+        error: 'Not Found',
+        message: 'User not found',
       }
-    })
+    }
 
-    return c.json({
-      message: 'Traffic reported successfully',
-      data: {
-        userId,
-        u: body.u,
-        d: body.d,
-      }
-    })
-  } catch (error) {
-    console.error('Report traffic error:', error)
-    return c.json({
-      error: 'Failed to report traffic',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * POST /node/mu/nodes/:id/info
- * Mu API - Report node info
- */
-node.post('/mu/nodes/:id/info', zValidator('json', z.object({
-  load: z.string().optional(),
-  onlineUserCount: z.number().int().min(0).optional(),
-})), async (c) => {
-  try {
-    const nodeId = parseInt(c.req.param('id'))
-    const body = c.req.valid('json')
-
-    // TODO: Verify mu key
-
-    const node = await prisma.node.update({
+    // Query node
+    const node = await prisma.ss_node.findUnique({
       where: { id: nodeId },
-      data: {
-        ...(body.load !== undefined && { load: body.load }),
-        ...(body.onlineUserCount !== undefined && { onlineUserCount: body.onlineUserCount }),
-        isOnline: true,
+    })
+
+    if (!node) {
+      set.status = 404
+      return {
+        error: 'Not Found',
+        message: 'Node not found',
       }
-    })
+    }
 
-    return c.json({
-      message: 'Node info updated successfully',
-      data: node
-    })
-  } catch (error) {
-    console.error('Update node info error:', error)
-    return c.json({
-      error: 'Failed to update node info',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * POST /node/mu/nodes/:id/online
- * Mu API - Report online users
- */
-node.post('/mu/nodes/:id/online', zValidator('json', z.object({
-  count: z.number().int().min(0),
-})), async (c) => {
-  try {
-    const nodeId = parseInt(c.req.param('id'))
-    const body = c.req.valid('json')
-
-    // TODO: Verify mu key
-
-    await prisma.node.update({
-      where: { id: nodeId },
-      data: {
-        onlineUserCount: body.count,
-        isOnline: true,
+    // Check access permissions
+    if (node.node_class > 0 && user.class < node.node_class) {
+      set.status = 403
+      return {
+        error: 'Forbidden',
+        message: 'Your account level is insufficient for this node',
       }
-    })
+    }
 
-    return c.json({
-      message: 'Online users reported successfully',
-      data: {
-        nodeId,
-        count: body.count
+    if (node.node_group > 0 && user.node_group !== node.node_group) {
+      set.status = 403
+      return {
+        error: 'Forbidden',
+        message: 'You do not have access to this node group',
       }
+    }
+
+    // Get online user count from log if available
+    const onlineLog = await prisma.ss_node_online_log.findFirst({
+      where: { node_id: nodeId },
+      orderBy: { log_time: 'desc' },
     })
+
+    return {
+      id: node.id,
+      name: node.name,
+      server: node.server,
+      port: node.server_port,
+      method: node.method,
+      protocol: node.protocol,
+      obfs: node.obfs,
+      type: node.type,
+      node_class: node.node_class,
+      node_group: node.node_group,
+      traffic_rate: node.traffic_rate,
+      online_user: node.online_user,
+      status: node.status,
+      info: node.info,
+      online_log: onlineLog ? {
+        online_user: onlineLog.online_user,
+        log_time: onlineLog.log_time,
+      } : null,
+    }
   } catch (error) {
-    console.error('Report online users error:', error)
-    return c.json({
-      error: 'Failed to report online users',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
+    console.error('Node detail error:', error)
+    set.status = 500
+    return {
+      error: 'Internal Server Error',
+      message: 'Failed to fetch node details',
+    }
   }
+}, {
+  detail: {
+    tags: ['Node'],
+    description: 'Get detailed information about a specific node',
+    security: [{ BearerAuth: [] }],
+  },
 })
-
-// Admin routes below - require admin auth
-
-/**
- * POST /node
- * Create node (admin only)
- */
-node.post('/', authMiddleware, adminMiddleware, zValidator('json', z.object({
-  name: z.string().min(1),
-  server: z.string().min(1),
-  type: z.number().int().default(1),
-  protocol: z.string().default('shadowsocks'),
-  info: z.string().optional(),
-  host: z.string().optional(),
-  method: z.string().default('aes-256-gcm'),
-  rate: z.string().default('1.00'),
-  status: z.boolean().default(true),
-  muPort: z.number().int().optional(),
-  muRegex: z.string().optional(),
-  sortOrder: z.number().int().default(0),
-})), async (c) => {
-  try {
-    const body = c.req.valid('json')
-
-    const node = await prisma.node.create({
-      data: body
-    })
-
-    return c.json({
-      message: 'Node created successfully',
-      data: node
-    }, 201)
-  } catch (error) {
-    console.error('Create node error:', error)
-    return c.json({
-      error: 'Failed to create node',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * PUT /node/:id
- * Update node (admin only)
- */
-node.put('/:id', authMiddleware, adminMiddleware, zValidator('json', z.object({
-  name: z.string().min(1).optional(),
-  server: z.string().min(1).optional(),
-  type: z.number().int().optional(),
-  protocol: z.string().optional(),
-  info: z.string().optional(),
-  host: z.string().optional(),
-  method: z.string().optional(),
-  rate: z.string().optional(),
-  status: z.boolean().optional(),
-  muPort: z.number().int().optional(),
-  muRegex: z.string().optional(),
-  sortOrder: z.number().int().optional(),
-})), async (c) => {
-  try {
-    const nodeId = parseInt(c.req.param('id'))
-    const body = c.req.valid('json')
-
-    const node = await prisma.node.update({
-      where: { id: nodeId },
-      data: body
-    })
-
-    return c.json({
-      message: 'Node updated successfully',
-      data: node
-    })
-  } catch (error) {
-    console.error('Update node error:', error)
-    return c.json({
-      error: 'Failed to update node',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-/**
- * DELETE /node/:id
- * Delete node (admin only)
- */
-node.delete('/:id', authMiddleware, adminMiddleware, async (c) => {
-  try {
-    const nodeId = parseInt(c.req.param('id'))
-
-    await prisma.node.delete({
-      where: { id: nodeId }
-    })
-
-    return c.json({
-      message: 'Node deleted successfully'
-    })
-  } catch (error) {
-    console.error('Delete node error:', error)
-    return c.json({
-      error: 'Failed to delete node',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, 500)
-  }
-})
-
-export default node

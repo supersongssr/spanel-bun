@@ -5,7 +5,7 @@
 SPanel 的现代化重构版本，采用完全的前后端分离架构。
 
 - **前端**: Vue 3 + Vite（多页面MPA模式）→ 生成纯静态HTML/CSS/JS
-- **后端**: Bun + TypeScript + Hono → RESTful API
+- **后端**: Bun + TypeScript + Elysia.js → RESTful API
 - **数据库**: MySQL/MariaDB + Prisma ORM
 - **部署**: Nginx 静态文件服务 + Bun API 服务
 
@@ -13,10 +13,12 @@ SPanel 的现代化重构版本，采用完全的前后端分离架构。
 
 ### 后端
 - **运行时**: Bun (高性能 JavaScript 运行时)
-- **框架**: Hono (快速、类型安全的 Web 框架)
+- **框架**: Elysia.js v0 (快速、类型安全的 Web 框架)
 - **语言**: TypeScript
 - **ORM**: Prisma
-- **认证**: JWT
+- **认证**: JWT (@elysiajs/jwt)
+- **API 文档**: Swagger (@elysiajs/swagger)
+- **CORS**: @elysiajs/cors
 - **缓存**: Redis
 
 ### 前端
@@ -111,50 +113,101 @@ spanel-bun/
 
 ### 快速部署
 
-#### 1. 构建前端静态文件
+#### 环境要求
+- Bun >= 1.0.0
+- Redis >= 7.0 (运行在宿主机)
+- Node.js >= 18.0.0 (用于前端开发)
+- MySQL >= 8.0 / MariaDB >= 10.5
+- Nginx (生产环境)
+
+#### 1. 安装依赖
+```bash
+# 安装 Bun (如果未安装)
+curl -fsSL https://bun.sh/install | bash
+
+# 安装 Redis (Debian/Ubuntu)
+sudo apt-get update
+sudo apt-get install -y redis-server
+sudo service redis-server start
+
+# 验证 Redis 运行
+redis-cli ping  # 应该返回 PONG
+```
+
+#### 2. 构建前端静态文件
 ```bash
 cd frontend
-./scripts/build-public.sh
+bun install
+bun run build:public
 ```
 
-#### 2. 部署前端
+#### 3. 配置环境变量
 ```bash
-cd /root/git/spanel-bun
-sudo ./scripts/deploy-public.sh
+cd backend
+cp .env.example .env
+nano .env  # 编辑配置
 ```
 
-这会创建软链接: `/var/www/test-spanel-bun.freessr.bid` → `frontend/public`
+确保 `.env` 中 Redis 连接地址为:
+```bash
+REDIS_URL="redis://127.0.0.1:6379"
+```
 
-#### 3. 配置 Nginx
+#### 4. 初始化数据库
+```bash
+cd backend
+bun run prisma:generate
+bun run prisma:migrate
+```
+
+#### 5. 配置 Nginx
 ```bash
 sudo ./scripts/install-nginx-config.sh
 ```
 
-#### 4. 启动后端
+#### 6. 设置文件权限
+```bash
+sudo chown -R www-data:www-data /root/git/spanel-bun/frontend/dist
+sudo chmod -R 755 /root/git/spanel-bun/frontend/dist
+```
+
+#### 7. 启动后端
 ```bash
 cd backend
-bun install
-cp .env.example .env
-nano .env  # 编辑配置
-bun run prisma:generate
-bun run prisma:migrate
 bun run dev
+
+# 或使用 PM2 (生产环境)
+pm2 start backend/src/index.ts --name spanel-api
+pm2 save
+pm2 startup
 ```
 
 ### 本地开发
 
-**后端:**
+**后端开发:**
 ```bash
 cd backend
 bun install
 bun run dev
 ```
 
-**前端:**
+**前端开发:**
 ```bash
 cd frontend
 npm install
 npm run dev
+```
+
+**Redis 管理:**
+```bash
+# 启动
+sudo service redis-server start
+
+# 停止
+sudo service redis-server stop
+
+# 重启
+sudo service redis-server restart
 ```
 
 ## 访问地址
@@ -167,17 +220,25 @@ npm run dev
 | 用户仪表板 | https://test-spanel-bun.freessr.bid/user/index.html |
 | 用户注册 | https://test-spanel-bun.freessr.bid/user/register.html |
 | 管理后台 | https://test-spanel-bun.freessr.bid/admin/index.html |
-| API | https://test-spanel-bun.freessr.bid/api/ |
+| API 健康检查 | https://test-spanel-bun.freessr.bid/api/health |
+| API 文档 (Swagger) | https://test-spanel-bun.freessr.bid/api/swagger |
+| API 根路径 | https://test-spanel-bun.freessr.bid/api/ |
 
 ## 部署架构
 
 ```
 test-spanel-bun.freessr.bid
-├── /api/*      → Bun API (localhost:3000)
-├── /user/*     → 用户端静态文件
-├── /admin/*    → 管理端静态文件
+├── /api/*      → Bun API (宿主机 127.0.0.1:3000)
+├── /user/*     → 用户端静态文件 (frontend/dist/src/pages/index/)
+├── /admin/*    → 管理端静态文件 (frontend/dist/admin/)
 └── /*          → 重定向到 /user/
 ```
+
+**运行环境**:
+- Bun 后端: 宿主机原生运行,监听 3000 端口
+- Redis: 宿主机原生运行,监听 6379 端口
+- Nginx: 宿主机运行,反向代理 API 和服务静态文件
+- MySQL: 远程数据库 103.214.22.166:3306
 
 ## 脚本说明
 
